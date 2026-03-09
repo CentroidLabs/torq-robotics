@@ -1,0 +1,48 @@
+[build-system]
+requires = ["hatchling>=1.29.0"]
+build-backend = "hatchling.build"
+
+[project]
+name = "torq-robotics"
+version = "0.1.0-alpha"
+description = "Robot Learning Data Infrastructure SDK"
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.10"
+authors = [{ name = "Centroid Foundry" }]
+
+dependencies = [
+    "numpy>=1.24",
+    "pyarrow>=14.0",
+    "mcap>=1.1",
+    "h5py>=3.9",
+    "tqdm>=4.65",
+    "typer>=0.9",
+]
+
+[project.optional-dependencies]
+torch  = ["torch>=2.0"]
+jax    = ["jax>=0.4"]
+vision = ["imageio>=2.31", "imageio-ffmpeg>=0.4"]
+ros2   = ["mcap-ros2-support>=0.4"]
+dev    = ["pytest>=9.0", "ruff>=0.15", "pytest-cov"]
+
+[project.scripts]
+tq = "torq.cli.main:app"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/torq"]
+
+[tool.ruff]
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "W"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+markers = [
+    "slow: marks tests as slow (deselect with '-m \"not slow\"')",
+    "network: marks tests requiring network access",
+]

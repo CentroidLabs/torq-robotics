@@ -1,0 +1,55 @@
+{
+  "fps": 50,
+  "robot_type": "aloha",
+  "total_episodes": 2,
+  "total_frames": 60,
+  "features": {
+    "observation.state": {
+      "dtype": "float32",
+      "shape": [
+        14
+      ]
+    },
+    "action": {
+      "dtype": "float32",
+      "shape": [
+        14
+      ]
+    },
+    "observation.images.top": {
+      "dtype": "video",
+      "shape": [
+        3,
+        48,
+        64
+      ],
+      "video_info": {
+        "fps": 50
+      }
+    },
+    "timestamp": {
+      "dtype": "float32",
+      "shape": [
+        1
+      ]
+    },
+    "episode_index": {
+      "dtype": "int64",
+      "shape": [
+        1
+      ]
+    },
+    "frame_index": {
+      "dtype": "int64",
+      "shape": [
+        1
+      ]
+    },
+    "index": {
+      "dtype": "int64",
+      "shape": [
+        1
+      ]
+    }
+  }
+}
