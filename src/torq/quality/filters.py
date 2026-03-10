@@ -117,8 +117,7 @@ def filter(
 
     if n_passed == 0:
         logger.warning(
-            "0/%d episodes passed quality gate (min_score=%.2f). "
-            "Consider lowering the threshold.",
+            "0/%d episodes passed quality gate (min_score=%.2f). Consider lowering the threshold.",
             total,
             min_score,
         )

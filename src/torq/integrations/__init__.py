@@ -28,8 +28,8 @@ def _notify_integrations(dataset: Dataset, config: dict) -> None:
         dataset: The Torq Dataset being loaded.
         config: DataLoader configuration dict (batch_size, num_workers, etc.).
     """
-    from torq.integrations import wandb as _wandb  # noqa: PLC0415
     from torq.integrations import mlflow as _mlflow  # noqa: PLC0415
+    from torq.integrations import wandb as _wandb  # noqa: PLC0415
 
     for name, mod in (("wandb", _wandb), ("mlflow", _mlflow)):
         try:

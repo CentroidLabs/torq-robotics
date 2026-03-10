@@ -8,8 +8,8 @@ the primary return type of ``tq.compose()`` and the input type expected by
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
 from collections.abc import Iterator
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:

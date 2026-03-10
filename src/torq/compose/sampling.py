@@ -85,6 +85,7 @@ def sample(
 
 # ── Strategy implementations ──────────────────────────────────────────────────
 
+
 def _none(episodes: list[Episode], limit: int | None) -> list[Episode]:
     """Return episodes as-is, optionally truncated to limit."""
     return episodes[:limit] if limit is not None else episodes
@@ -125,10 +126,7 @@ def _stratified(
         shuffled_groups.append(shuffled)
 
     # First pass: assign initial quotas, capped by group size
-    taken = [
-        min(base + (1 if i < remainder else 0), len(g))
-        for i, g in enumerate(shuffled_groups)
-    ]
+    taken = [min(base + (1 if i < remainder else 0), len(g)) for i, g in enumerate(shuffled_groups)]
 
     # Second pass: redistribute any unallocated slots to groups with spare capacity
     slots_remaining = effective - sum(taken)

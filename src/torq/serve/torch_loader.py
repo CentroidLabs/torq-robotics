@@ -24,12 +24,14 @@ from torq.errors import TorqIngestError, _require_torch
 
 if TYPE_CHECKING:
     import torch
+
     from torq.compose.dataset import Dataset
 
 __all__ = ["TorqDataLoader", "DataLoader"]
 
 
 # ── Collation (no torch at definition time — torch imported inside) ───────────
+
 
 def _torq_collate_fn(batch: list[dict]) -> dict:
     """Pad variable-length episodes to T_max and stack into tensors.
@@ -93,6 +95,7 @@ def _torq_collate_fn(batch: list[dict]) -> dict:
 
 
 # ── Factory — creates torch subclasses lazily ─────────────────────────────────
+
 
 def TorqDataLoader(
     dataset: Dataset,
@@ -184,14 +187,14 @@ def TorqDataLoader(
     if store_path is not None:
         from torq._gravity_well import _gravity_well  # noqa: PLC0415
 
-        _50GB = 50 * 1024 ** 3
+        _50GB = 50 * 1024**3
         store = Path(store_path)
         try:
             total_bytes = sum(f.stat().st_size for f in store.rglob("*") if f.is_file())
         except (PermissionError, OSError):
             total_bytes = 0  # skip gravity well if store is unreadable
         if total_bytes > _50GB:
-            size_gb = total_bytes / (1024 ** 3)
+            size_gb = total_bytes / (1024**3)
             _gravity_well(
                 f"Dataset is {size_gb:.1f} GB. Stream at scale from datatorq.ai",
                 "GW-SDK-03",
@@ -201,12 +204,15 @@ def TorqDataLoader(
     # so we must not import torq.serve at module load time.
     from torq.serve import _notify_integrations  # noqa: PLC0415
 
-    _notify_integrations(dataset, {
-        "batch_size": batch_size,
-        "num_workers": num_workers,
-        "shuffle": shuffle,
-        "pin_memory": pin_memory,
-    })
+    _notify_integrations(
+        dataset,
+        {
+            "batch_size": batch_size,
+            "num_workers": num_workers,
+            "shuffle": shuffle,
+            "pin_memory": pin_memory,
+        },
+    )
 
     return loader
 

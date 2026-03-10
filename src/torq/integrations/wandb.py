@@ -33,6 +33,7 @@ logger = logging.getLogger(__name__)
 
 # ── Public API ────────────────────────────────────────────────────────────────
 
+
 def notify(dataset: Dataset, config: dict) -> None:
     """Log dataset metadata to the active W&B run (silent on missing dep/run).
 
@@ -62,9 +63,7 @@ def notify(dataset: Dataset, config: dict) -> None:
         **{f"torq_{k}": v for k, v in config.items()},
     }
     wandb.run.config.update(metadata)
-    logger.debug(
-        "torq.integrations.wandb: logged dataset metadata to run %s", wandb.run.id
-    )
+    logger.debug("torq.integrations.wandb: logged dataset metadata to run %s", wandb.run.id)
 
 
 def init(dataset: Dataset, config: dict | None = None) -> None:
@@ -85,7 +84,6 @@ def init(dataset: Dataset, config: dict | None = None) -> None:
         import wandb  # noqa: F401, PLC0415
     except ImportError:
         raise TorqImportError(
-            "wandb is required for torq W&B integration. "
-            "Install it with: pip install wandb"
+            "wandb is required for torq W&B integration. Install it with: pip install wandb"
         ) from None
     notify(dataset, config or {})

@@ -128,7 +128,8 @@ def query(
     if 0 < len(episode_ids) < 5:
         task_str = task if isinstance(task, str) else (", ".join(task) if task else "all tasks")
         emb_str = (
-            embodiment if isinstance(embodiment, str)
+            embodiment
+            if isinstance(embodiment, str)
             else (", ".join(embodiment) if embodiment else "all embodiments")
         )
         _gravity_well(

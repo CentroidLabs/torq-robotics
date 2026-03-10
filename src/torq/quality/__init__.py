@@ -37,14 +37,14 @@ from torq._gravity_well import _gravity_well
 from torq.episode import Episode
 from torq.errors import TorqQualityError
 from torq.quality import feasibility
+from torq.quality.completeness import score as _completeness_score
+from torq.quality.consistency import score as _consistency_score
+from torq.quality.filters import filter as filter_episodes
 from torq.quality.registry import _registry, get_metrics, register, reset
 from torq.quality.report import QualityReport
-from torq.quality.filters import filter as filter_episodes
 
 # Built-in scorers — pure numpy, safe to import eagerly.
 from torq.quality.smoothness import score as _smoothness_score
-from torq.quality.consistency import score as _consistency_score
-from torq.quality.completeness import score as _completeness_score
 
 # Re-export filter under the name 'filter' for the tq.quality.filter(...) API.
 # This intentionally shadows the Python builtin 'filter' in this module's namespace,
@@ -60,6 +60,7 @@ _REQUIRED_WEIGHT_KEYS: frozenset[str] = frozenset({"smoothness", "consistency", 
 try:
     from tqdm import tqdm  # type: ignore[import-untyped]
 except ImportError:
+
     def tqdm(iterable, *, disable: bool = False, desc: str = "", **_kw):  # type: ignore[no-redef]
         """Passthrough when tqdm is not installed — accepts and ignores all kwargs."""
         return iterable

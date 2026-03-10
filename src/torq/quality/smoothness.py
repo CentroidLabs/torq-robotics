@@ -63,9 +63,9 @@ def score(episode: Episode) -> QualityScore:
     try:
         actions = episode.actions.astype(np.float64)
 
-        velocity = np.diff(actions, axis=0)       # [T-1, D]
+        velocity = np.diff(actions, axis=0)  # [T-1, D]
         acceleration = np.diff(velocity, axis=0)  # [T-2, D]
-        jerk = np.diff(acceleration, axis=0)      # [T-3, D]
+        jerk = np.diff(acceleration, axis=0)  # [T-3, D]
 
         rms_jerk: float = float(np.sqrt(np.mean(jerk**2)))
         smoothness = 1.0 / (1.0 + rms_jerk / REFERENCE_JERK)

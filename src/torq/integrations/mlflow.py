@@ -33,6 +33,7 @@ logger = logging.getLogger(__name__)
 
 # ── Public API ────────────────────────────────────────────────────────────────
 
+
 def notify(dataset: Dataset, config: dict) -> None:
     """Log dataset metadata to the active MLflow run (silent on missing dep/run).
 
@@ -62,11 +63,13 @@ def notify(dataset: Dataset, config: dict) -> None:
         **{f"torq_{k}": v for k, v in config.items()},
     }
     mlflow.log_params(params)
-    mlflow.set_tags({
-        "torq_dataset_name": dataset.name,
-        "torq_episode_count": str(len(dataset)),
-        "torq_quality_n_scored": str(quality["torq_quality_n_scored"]),
-    })
+    mlflow.set_tags(
+        {
+            "torq_dataset_name": dataset.name,
+            "torq_episode_count": str(len(dataset)),
+            "torq_quality_n_scored": str(quality["torq_quality_n_scored"]),
+        }
+    )
     logger.debug(
         "torq.integrations.mlflow: logged dataset metadata to run %s",
         mlflow.active_run().info.run_id,
@@ -90,7 +93,6 @@ def init(dataset: Dataset, config: dict | None = None) -> None:
         import mlflow  # noqa: F401, PLC0415
     except ImportError:
         raise TorqImportError(
-            "mlflow is required for torq MLflow integration. "
-            "Install it with: pip install mlflow"
+            "mlflow is required for torq MLflow integration. Install it with: pip install mlflow"
         ) from None
     notify(dataset, config or {})
