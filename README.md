@@ -1,6 +1,5 @@
 <p align="center">
-  <strong>torq-robotics</strong><br>
-  Robot Learning Data Infrastructure SDK
+  <img src="git-cover-img.svg" alt="torq-robotics" width="100%">
 </p>
 
 <p align="center">
