@@ -38,7 +38,7 @@ pip install torq-robotics[vision]        # + video I/O (imageio)
 pip install torq-robotics[dev]           # + pytest, ruff (contributors)
 ```
 
-Requires Python 3.10+.
+Requires Python 3.12+.
 
 ## Supported Formats
 
