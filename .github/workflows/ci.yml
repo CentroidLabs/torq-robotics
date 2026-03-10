@@ -25,8 +25,8 @@ jobs:
       - name: Verify import works without extras
         run: python -c "import torq; print(torq.__version__)"
 
-      - name: Install dev extras
-        run: pip install -e ".[dev]"
+      - name: Install dev extras and optional dependencies for testing
+        run: pip install -e ".[dev,vision,ros2]" pandas
 
       - name: Lint
         run: ruff check src/ && ruff format --check src/
