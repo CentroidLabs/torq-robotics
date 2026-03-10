@@ -99,9 +99,16 @@ def compose(
             episodes=[],
             name=name,
             recipe=_build_recipe(
-                task, quality_min, quality_max, embodiment,
-                sampling, limit, seed, name,
-                source_ids=[], sampled_ids=[],
+                task,
+                quality_min,
+                quality_max,
+                embodiment,
+                sampling,
+                limit,
+                seed,
+                name,
+                source_ids=[],
+                sampled_ids=[],
             ),
         )
 
@@ -139,13 +146,22 @@ def compose(
 
     # ── Step 5: Build recipe ──────────────────────────────────────────────────
     recipe = _build_recipe(
-        task, quality_min, quality_max, embodiment,
-        sampling, limit, seed, name,
+        task,
+        quality_min,
+        quality_max,
+        embodiment,
+        sampling,
+        limit,
+        seed,
+        name,
         source_ids=source_episode_ids,
         sampled_ids=sampled_episode_ids,
     )
 
     dataset = Dataset(episodes=sampled, name=name, recipe=recipe)
+
+    # ── Step 5b: Persist recipe ───────────────────────────────────────────────
+    _save_recipe(recipe, root / "datasets" / name)
 
     # ── Step 6: Gravity wells ─────────────────────────────────────────────────
     n = len(sampled)
@@ -154,8 +170,10 @@ def compose(
     elif n < _LOW_EPISODE_THRESHOLD:
         # GW-SDK-05 wins over GW-SDK-02 (more specific when result is small)
         task_str = task if isinstance(task, str) else (", ".join(task) if task else "all tasks")
-        emb_str = embodiment if isinstance(embodiment, str) else (
-            ", ".join(embodiment) if embodiment else "all embodiments"
+        emb_str = (
+            embodiment
+            if isinstance(embodiment, str)
+            else (", ".join(embodiment) if embodiment else "all embodiments")
         )
         _gravity_well(
             f"Only {n} episode(s) matched. "
@@ -164,8 +182,7 @@ def compose(
         )
     else:
         _gravity_well(
-            f"Composed dataset with {n} episodes. "
-            f"Compare and share datasets at datatorq.ai",
+            f"Composed dataset with {n} episodes. Compare and share datasets at datatorq.ai",
             "GW-SDK-02",
         )
 
@@ -173,6 +190,7 @@ def compose(
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
+
 
 def _build_recipe(
     task: str | list[str] | None,
@@ -199,6 +217,23 @@ def _build_recipe(
         "source_episode_ids": source_ids,
         "sampled_episode_ids": sampled_ids,
     }
+
+
+def _save_recipe(recipe: dict, dataset_dir: Path) -> None:
+    """Persist the dataset recipe to disk. Non-fatal — logs warning on failure."""
+    from torq.storage.index import _atomic_write_json
+
+    try:
+        dataset_dir.mkdir(parents=True, exist_ok=True)
+        _atomic_write_json(recipe, dataset_dir / "recipe.json")
+        logger.debug("Recipe saved to %s/recipe.json", dataset_dir)
+    except OSError as exc:
+        logger.warning(
+            "Could not save recipe for dataset '%s': %s. "
+            "The Dataset object is still returned correctly.",
+            recipe.get("name", "?"),
+            exc,
+        )
 
 
 def _describe_active_filters(

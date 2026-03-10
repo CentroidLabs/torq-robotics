@@ -27,7 +27,12 @@ __all__ = [
 logger = logging.getLogger(__name__)
 
 
-def ingest(path: str | Path, fmt: str = "auto") -> list[Episode]:
+def ingest(
+    path: str | Path,
+    fmt: str = "auto",
+    errors: list[dict] | None = None,
+    stats: dict[str, int] | None = None,
+) -> list[Episode]:
     """Ingest robot recordings from a file or directory into canonical Episodes.
 
     Supports MCAP (ROS 2), HDF5 (robomimic), and LeRobot v3.0 formats.
@@ -40,6 +45,12 @@ def ingest(path: str | Path, fmt: str = "auto") -> list[Episode]:
             containing multiple recording files.
         fmt: Format override. One of ``"auto"``, ``"mcap"``, ``"hdf5"``,
             ``"lerobot"``. Default ``"auto"`` uses detection heuristics.
+        errors: Optional output list. In directory bulk mode, dicts with
+            ``{"path": str, "reason": str}`` are appended for each failed file.
+            Ignored in single-file mode (errors raise ``TorqIngestError``).
+        stats: Optional output dict. In directory bulk mode, populated with
+            ``{"files_succeeded": int}`` — the number of files that produced
+            at least one episode. In single-file mode, set to 1 on success.
 
     Returns:
         List of Episode objects. Empty list if directory contains no ingestible
@@ -54,18 +65,24 @@ def ingest(path: str | Path, fmt: str = "auto") -> list[Episode]:
         >>> episodes = tq.ingest('./recordings/session.mcap')
         >>> episodes = tq.ingest('./lerobot_dataset/')
         >>> episodes = tq.ingest('./recordings/', fmt='auto')
+        >>> failures: list[dict] = []
+        >>> info: dict[str, int] = {}
+        >>> episodes = tq.ingest('./recordings/', errors=failures, stats=info)
     """
     from torq.errors import TorqIngestError
 
     root = Path(path)
 
     if fmt != "auto":
-        return _dispatch(root, fmt)
+        result = _dispatch(root, fmt)
+        if stats is not None:
+            stats["files_succeeded"] = 1
+        return result
 
     detected = detect_format(root)
 
     if detected == "directory":
-        return _ingest_directory(root)
+        return _ingest_directory(root, errors=errors, stats=stats)
 
     if detected == "unknown":
         raise TorqIngestError(
@@ -75,7 +92,10 @@ def ingest(path: str | Path, fmt: str = "auto") -> list[Episode]:
             f".mcap, .hdf5, .h5 files or a LeRobot dataset (meta/info.json)."
         )
 
-    return _dispatch(root, detected)
+    result = _dispatch(root, detected)
+    if stats is not None:
+        stats["files_succeeded"] = 1
+    return result
 
 
 def _dispatch(path: Path, fmt: str) -> list[Episode]:
@@ -91,7 +111,11 @@ def _dispatch(path: Path, fmt: str) -> list[Episode]:
     raise TorqIngestError(f"Unknown format '{fmt}'. Supported formats: {_SUPPORTED_FORMATS}.")
 
 
-def _ingest_directory(root: Path) -> list[Episode]:
+def _ingest_directory(
+    root: Path,
+    errors: list[dict] | None = None,
+    stats: dict[str, int] | None = None,
+) -> list[Episode]:
     """Recursively discover and ingest all supported files in a directory."""
     from torq._config import config
     from torq.errors import TorqIngestError
@@ -141,9 +165,17 @@ def _ingest_directory(root: Path) -> list[Episode]:
         except TorqIngestError as exc:
             logger.warning("Skipping '%s': %s", item, exc)
             failed.append(item)
+            if errors is not None:
+                errors.append({"path": str(item), "reason": str(exc)})
         except Exception as exc:
-            logger.warning("Skipping '%s': unexpected %s: %s", item, type(exc).__name__, exc)
+            reason = f"unexpected {type(exc).__name__}: {exc}"
+            logger.warning("Skipping '%s': %s", item, reason)
             failed.append(item)
+            if errors is not None:
+                errors.append({"path": str(item), "reason": reason})
+
+    if stats is not None:
+        stats["files_succeeded"] = success_count
 
     if failed:
         logger.info(

@@ -29,6 +29,7 @@ from torq.errors import TorqComposeError
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
+
 def _mock_episode(ep_id: str, task: str = "pick", quality: float | None = 0.8) -> MagicMock:
     ep = MagicMock(spec=Episode)
     ep.episode_id = ep_id
@@ -47,6 +48,7 @@ def _make_episodes(ids_tasks: list[tuple[str, str, float]]) -> list[MagicMock]:
 
 # ── store_path required ───────────────────────────────────────────────────────
 
+
 class TestStorePath:
     def test_missing_store_path_raises(self) -> None:
         # store_path is now a truly required keyword-only argument — Python raises
@@ -57,16 +59,22 @@ class TestStorePath:
 
 # ── Full pipeline ─────────────────────────────────────────────────────────────
 
+
 class TestFullPipeline:
     def test_returns_dataset_with_matched_episodes(self, tmp_path: Path) -> None:
-        eps = _make_episodes([
-            ("ep-001", "pick", 0.9),
-            ("ep-002", "pick", 0.85),
-            ("ep-003", "pick", 0.7),
-        ])
+        eps = _make_episodes(
+            [
+                ("ep-001", "pick", 0.9),
+                ("ep-002", "pick", 0.85),
+                ("ep-003", "pick", 0.7),
+            ]
+        )
         with (
             patch("torq.compose._compose.query_index", return_value=["ep-001", "ep-002", "ep-003"]),
-            patch("torq.compose._compose.load", side_effect=lambda eid, sp: {e.episode_id: e for e in eps}[eid]),
+            patch(
+                "torq.compose._compose.load",
+                side_effect=lambda eid, sp: {e.episode_id: e for e in eps}[eid],
+            ),
         ):
             ds = compose(task="pick", store_path=tmp_path)
 
@@ -126,7 +134,9 @@ class TestFullPipeline:
         ep_map = {e.episode_id: e for e in eps}
         with (
             patch("torq.compose._compose.query_index", return_value=["ep-001", "ep-002"]),
-            patch("torq.compose._compose.load", side_effect=lambda eid, sp: ep_map[eid]) as mock_load,
+            patch(
+                "torq.compose._compose.load", side_effect=lambda eid, sp: ep_map[eid]
+            ) as mock_load,
         ):
             compose(store_path=tmp_path)
 
@@ -136,6 +146,7 @@ class TestFullPipeline:
 
 
 # ── Recipe population ─────────────────────────────────────────────────────────
+
 
 class TestRecipe:
     def test_all_filter_params_in_recipe(self, tmp_path: Path) -> None:
@@ -187,7 +198,10 @@ class TestRecipe:
         eps = _make_episodes([("ep-001", "pick", 0.9), ("ep-002", "pick", 0.85)])
         with (
             patch("torq.compose._compose.query_index", return_value=["ep-001", "ep-002"]),
-            patch("torq.compose._compose.load", side_effect=lambda eid, sp: {e.episode_id: e for e in eps}[eid]),
+            patch(
+                "torq.compose._compose.load",
+                side_effect=lambda eid, sp: {e.episode_id: e for e in eps}[eid],
+            ),
         ):
             ds = compose(sampling="none", limit=1, store_path=tmp_path)
 
@@ -197,14 +211,19 @@ class TestRecipe:
         assert len(ds.recipe["sampled_episode_ids"]) == 1
 
     def test_sampled_episode_ids_post_sampling(self, tmp_path: Path) -> None:
-        eps = _make_episodes([
-            ("ep-001", "pick", 0.9),
-            ("ep-002", "pick", 0.85),
-            ("ep-003", "pick", 0.7),
-        ])
+        eps = _make_episodes(
+            [
+                ("ep-001", "pick", 0.9),
+                ("ep-002", "pick", 0.85),
+                ("ep-003", "pick", 0.7),
+            ]
+        )
         with (
             patch("torq.compose._compose.query_index", return_value=["ep-001", "ep-002", "ep-003"]),
-            patch("torq.compose._compose.load", side_effect=lambda eid, sp: {e.episode_id: e for e in eps}[eid]),
+            patch(
+                "torq.compose._compose.load",
+                side_effect=lambda eid, sp: {e.episode_id: e for e in eps}[eid],
+            ),
         ):
             ds = compose(sampling="none", limit=2, store_path=tmp_path)
 
@@ -213,6 +232,7 @@ class TestRecipe:
 
 
 # ── Warnings ──────────────────────────────────────────────────────────────────
+
 
 class TestWarnings:
     def test_zero_episodes_after_query_returns_empty_dataset(
@@ -225,7 +245,9 @@ class TestWarnings:
             ds = compose(task="nonexistent", store_path=tmp_path)
 
         assert len(ds) == 0
-        assert any("0 episodes" in r.message or "filter" in r.message.lower() for r in caplog.records)
+        assert any(
+            "0 episodes" in r.message or "filter" in r.message.lower() for r in caplog.records
+        )
 
     def test_low_episode_count_warning(
         self, tmp_path: Path, caplog: pytest.LogCaptureFixture
@@ -233,7 +255,10 @@ class TestWarnings:
         eps = _make_episodes([("ep-001", "pick", 0.95), ("ep-002", "pick", 0.9)])
         with (
             patch("torq.compose._compose.query_index", return_value=["ep-001", "ep-002"]),
-            patch("torq.compose._compose.load", side_effect=lambda eid, sp: {e.episode_id: e for e in eps}[eid]),
+            patch(
+                "torq.compose._compose.load",
+                side_effect=lambda eid, sp: {e.episode_id: e for e in eps}[eid],
+            ),
             caplog.at_level(logging.WARNING, logger="torq.compose._compose"),
         ):
             ds = compose(quality_min=0.9, store_path=tmp_path)
@@ -261,14 +286,17 @@ class TestWarnings:
 
 # ── Sampling wired end-to-end ─────────────────────────────────────────────────
 
+
 class TestSamplingWired:
     def test_stratified_wired(self, tmp_path: Path) -> None:
-        eps = _make_episodes([
-            ("ep-001", "pick", 0.8),
-            ("ep-002", "pick", 0.8),
-            ("ep-003", "place", 0.8),
-            ("ep-004", "place", 0.8),
-        ])
+        eps = _make_episodes(
+            [
+                ("ep-001", "pick", 0.8),
+                ("ep-002", "pick", 0.8),
+                ("ep-003", "place", 0.8),
+                ("ep-004", "place", 0.8),
+            ]
+        )
         ep_map = {e.episode_id: e for e in eps}
         with (
             patch("torq.compose._compose.query_index", return_value=sorted(ep_map)),
@@ -297,6 +325,7 @@ class TestSamplingWired:
 
 # ── Determinism ───────────────────────────────────────────────────────────────
 
+
 class TestDeterminism:
     def test_same_seed_produces_same_order(self, tmp_path: Path) -> None:
         eps = _make_episodes([(f"ep-{i:03d}", "pick", 0.5 + i * 0.05) for i in range(10)])
@@ -313,3 +342,60 @@ class TestDeterminism:
         ds1 = _run()
         ds2 = _run()
         assert [ep.episode_id for ep in ds1] == [ep.episode_id for ep in ds2]
+
+
+# ── Recipe persistence ────────────────────────────────────────────────────────
+
+
+class TestRecipePersistence:
+    def test_compose_saves_recipe_file(self, tmp_path: Path) -> None:
+        """tq.compose() must write recipe.json to {store}/datasets/{name}/recipe.json."""
+        import json
+
+        eps = _make_episodes([("ep-001", "pick", 0.9), ("ep-002", "pick", 0.85)])
+        ep_map = {e.episode_id: e for e in eps}
+        with (
+            patch("torq.compose._compose.query_index", return_value=sorted(ep_map)),
+            patch("torq.compose._compose.load", side_effect=lambda eid, sp: ep_map[eid]),
+        ):
+            compose(name="pick_v1", store_path=tmp_path)
+
+        recipe_file = tmp_path / "datasets" / "pick_v1" / "recipe.json"
+        assert recipe_file.exists(), f"Expected recipe file at {recipe_file}"
+        recipe = json.loads(recipe_file.read_text())
+        assert recipe["name"] == "pick_v1"
+        assert "sampled_episode_ids" in recipe
+
+    def test_compose_recipe_contains_correct_episode_ids(self, tmp_path: Path) -> None:
+        """Saved recipe sampled_episode_ids must match what was returned by compose()."""
+        import json
+
+        eps = _make_episodes([("ep-001", "pick", 0.9), ("ep-002", "pick", 0.85)])
+        ep_map = {e.episode_id: e for e in eps}
+        with (
+            patch("torq.compose._compose.query_index", return_value=sorted(ep_map)),
+            patch("torq.compose._compose.load", side_effect=lambda eid, sp: ep_map[eid]),
+        ):
+            ds = compose(name="pick_v1", store_path=tmp_path)
+
+        recipe_file = tmp_path / "datasets" / "pick_v1" / "recipe.json"
+        recipe = json.loads(recipe_file.read_text())
+        assert set(recipe["sampled_episode_ids"]) == {ep.episode_id for ep in ds}
+
+    def test_recipe_file_overwritten_on_same_name(self, tmp_path: Path) -> None:
+        """Calling compose() twice with same name must overwrite the recipe file."""
+        import json
+
+        eps = _make_episodes([("ep-001", "pick", 0.9)])
+        ep_map = {e.episode_id: e for e in eps}
+        with (
+            patch("torq.compose._compose.query_index", return_value=["ep-001"]),
+            patch("torq.compose._compose.load", return_value=eps[0]),
+        ):
+            compose(name="ds", store_path=tmp_path)
+            compose(name="ds", store_path=tmp_path)
+
+        recipe_file = tmp_path / "datasets" / "ds" / "recipe.json"
+        assert recipe_file.exists()
+        recipe = json.loads(recipe_file.read_text())
+        assert recipe["name"] == "ds"
