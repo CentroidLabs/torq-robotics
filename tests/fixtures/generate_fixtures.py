@@ -541,6 +541,88 @@ def generate_lerobot_fixture() -> None:
     print(f"Generated {no_info_root} (no info.json)")
 
 
+LEROBOT_LIST_TYPE_DIR = "lerobot_list_type"
+
+
+def generate_lerobot_list_type_fixture() -> None:
+    """Generate a LeRobot v3.0 dataset fixture with list-type columns and nested video layout.
+
+    Creates ``tests/fixtures/data/lerobot_list_type/`` with:
+    - ``meta/info.json`` — v3.0 schema with task_index feature
+    - ``data/chunk-000/episode_000000.parquet`` and ``episode_000001.parquet``
+      using ``fixed_size_list<float32>[14]`` for ``observation.state`` and ``action``
+    - ``videos/observation.images.top/chunk-000/file-000.mp4`` — nested video layout
+    """
+    import json
+
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+
+    rng = np.random.default_rng(78)
+    root = FIXTURES_DIR / LEROBOT_LIST_TYPE_DIR
+
+    # Create directory structure
+    (root / "meta").mkdir(parents=True, exist_ok=True)
+    (root / "data" / "chunk-000").mkdir(parents=True, exist_ok=True)
+    (root / "videos" / "observation.images.top" / "chunk-000").mkdir(parents=True, exist_ok=True)
+
+    # ── meta/info.json ──
+    info = {
+        "codebase_version": "v3.0",
+        "fps": 50,
+        "robot_type": "aloha",
+        "total_episodes": 2,
+        "total_frames": 60,
+        "data_path": "data/chunk-{episode_chunk:03d}/episode_{episode_index:06d}.parquet",
+        "video_path": "videos/{video_key}/chunk-{episode_chunk:03d}/file-{episode_index:06d}.mp4",
+        "features": {
+            "observation.state": {"dtype": "float32", "shape": [14]},
+            "action": {"dtype": "float32", "shape": [14]},
+            "observation.images.top": {
+                "dtype": "video",
+                "shape": [3, 48, 64],
+                "video_info": {"fps": 50},
+            },
+            "timestamp": {"dtype": "float32", "shape": [1]},
+            "episode_index": {"dtype": "int64", "shape": [1]},
+            "frame_index": {"dtype": "int64", "shape": [1]},
+            "index": {"dtype": "int64", "shape": [1]},
+            "task_index": {"dtype": "int64", "shape": [1]},
+        },
+    }
+    (root / "meta" / "info.json").write_text(json.dumps(info, indent=2))
+    print(f"Generated {root / 'meta' / 'info.json'}")
+
+    # ── Parquet episode files with list-type columns ──
+    list_type = pa.list_(pa.float32(), 14)
+    t_per_ep = 30
+    for ep_idx in range(2):
+        state_data = rng.standard_normal((t_per_ep, 14)).astype(np.float32)
+        action_data = rng.standard_normal((t_per_ep, 14)).astype(np.float32)
+
+        rows = {
+            "episode_index": pa.array([ep_idx] * t_per_ep, type=pa.int64()),
+            "frame_index": pa.array(list(range(t_per_ep)), type=pa.int64()),
+            "index": pa.array(
+                list(range(ep_idx * t_per_ep, (ep_idx + 1) * t_per_ep)), type=pa.int64()
+            ),
+            "timestamp": pa.array([i / 50.0 for i in range(t_per_ep)], type=pa.float32()),
+            "task_index": pa.array([ep_idx] * t_per_ep, type=pa.int64()),
+            "observation.state": pa.array([row.tolist() for row in state_data], type=list_type),
+            "action": pa.array([row.tolist() for row in action_data], type=list_type),
+        }
+        table = pa.table(rows)
+        parquet_path = root / "data" / "chunk-000" / f"episode_{ep_idx:06d}.parquet"
+        pq.write_table(table, str(parquet_path))
+        print(f"Generated {parquet_path} ({parquet_path.stat().st_size:,} bytes)")
+
+    # ── Nested video layout: videos/observation.images.top/chunk-000/file-000.mp4 ──
+    mp4_path = root / "videos" / "observation.images.top" / "chunk-000" / "file-000.mp4"
+    # Stub: not a valid MP4 — only works because ImageSequence is lazy
+    _write_stub_mp4(mp4_path, t_per_ep * 2, 48, 64, rng)
+    print(f"Generated {mp4_path}")
+
+
 # ── Entry point ───────────────────────────────────────────────────────────────
 
 
@@ -555,5 +637,6 @@ if __name__ == "__main__":
     generate_empty_mcap()
     generate_robomimic_hdf5()
     generate_lerobot_fixture()
+    generate_lerobot_list_type_fixture()
 
     print("\nAll fixtures generated successfully.")

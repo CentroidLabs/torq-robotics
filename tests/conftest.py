@@ -139,6 +139,17 @@ def lerobot_dataset() -> Path:
 
 
 @pytest.fixture(scope="session")
+def lerobot_list_type() -> Path:
+    """Path to lerobot_list_type/ — 2-episode LeRobot dataset with list-type columns."""
+    p = FIXTURES_DATA / "lerobot_list_type"
+    if not p.exists():
+        pytest.skip(
+            "lerobot_list_type/ not found — run: python tests/fixtures/generate_fixtures.py"
+        )
+    return p
+
+
+@pytest.fixture(scope="session")
 def lerobot_no_info() -> Path:
     """Path to lerobot_no_info/ — LeRobot structure without meta/info.json."""
     p = FIXTURES_DATA / "lerobot_no_info"

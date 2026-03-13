@@ -199,6 +199,18 @@ class TestLerobotIngest:
         assert "state" in episodes[0].observations
         assert all(isinstance(v, np.ndarray) for v in episodes[0].observations.values())
 
+    def test_ingest_lerobot_second_episode_has_correct_metadata(
+        self, lerobot_dataset: Path
+    ) -> None:
+        """Second episode must have the same metadata shape as the first."""
+        from torq.ingest.lerobot import ingest
+
+        episodes = ingest(lerobot_dataset)
+        assert len(episodes) == 2
+        ep1 = episodes[1]
+        assert ep1.observations["state"].shape == (30, 14)
+        assert ep1.actions.shape == (30, 14)
+
     def test_ingest_lerobot_skips_unreadable_parquet_chunk(self, tmp_path: Path) -> None:
         """Unreadable Parquet chunk should be skipped with warning, not crash."""
         import json
@@ -241,3 +253,149 @@ class TestLerobotIngest:
 
         episodes = ingest(tmp_path)
         assert len(episodes) == 1
+
+
+class TestLerobotIngestListType:
+    """Tests for LeRobot v3.0 datasets with list-type (fixed_size_list) Arrow columns."""
+
+    def test_ingest_list_type_returns_episodes(self, lerobot_list_type: Path) -> None:
+        """List-type fixture has 2 episodes → must return 2 Episodes."""
+        from torq.episode import Episode
+        from torq.ingest.lerobot import ingest
+
+        episodes = ingest(lerobot_list_type)
+        assert len(episodes) == 2, f"Expected 2 episodes, got {len(episodes)}"
+        for ep in episodes:
+            assert isinstance(ep, Episode)
+
+    def test_ingest_list_type_state_array_shape(self, lerobot_list_type: Path) -> None:
+        """observations["state"] must be [30, 14] float32."""
+        from torq.ingest.lerobot import ingest
+
+        episodes = ingest(lerobot_list_type)
+        state = episodes[0].observations["state"]
+        assert isinstance(state, np.ndarray)
+        assert state.shape == (30, 14), f"Expected (30, 14), got {state.shape}"
+        assert state.dtype == np.float32
+
+    def test_ingest_list_type_action_array_shape(self, lerobot_list_type: Path) -> None:
+        """actions must be [30, 14] float32."""
+        from torq.ingest.lerobot import ingest
+
+        episodes = ingest(lerobot_list_type)
+        actions = episodes[0].actions
+        assert actions.shape == (30, 14), f"Expected (30, 14), got {actions.shape}"
+        assert actions.dtype == np.float32
+
+    def test_ingest_list_type_timestamps_int64_ns(self, lerobot_list_type: Path) -> None:
+        """Timestamps must be int64 nanoseconds."""
+        from torq.ingest.lerobot import ingest
+
+        episodes = ingest(lerobot_list_type)
+        assert episodes[0].timestamps.dtype == np.int64
+
+    def test_ingest_list_type_task_index_in_metadata(self, lerobot_list_type: Path) -> None:
+        """metadata["task_index"] must be present and integer."""
+        from torq.ingest.lerobot import ingest
+
+        episodes = ingest(lerobot_list_type)
+        assert "task_index" in episodes[0].metadata
+        assert isinstance(episodes[0].metadata["task_index"], int)
+        # ep0 → task_index=0, ep1 → task_index=1
+        assert episodes[0].metadata["task_index"] == 0
+        assert episodes[1].metadata["task_index"] == 1
+
+    def test_ingest_list_type_nested_video_discovered(self, lerobot_list_type: Path) -> None:
+        """Nested video layout must be discovered as ImageSequence."""
+        from torq.ingest.lerobot import ingest
+        from torq.media.image_sequence import ImageSequence
+
+        episodes = ingest(lerobot_list_type)
+        assert "top" in episodes[0].observations, (
+            f"Expected 'top' camera obs, got keys: {list(episodes[0].observations.keys())}"
+        )
+        assert isinstance(episodes[0].observations["top"], ImageSequence)
+
+    def test_ingest_list_type_prefers_list_over_scalar_when_both_exist(
+        self, tmp_path: Path
+    ) -> None:
+        """When both observation.state (list) and observation.state_0/1 (scalar) exist,
+        list-type values must win."""
+        import json
+
+        import pyarrow as pa
+        import pyarrow.parquet as pq
+
+        (tmp_path / "meta").mkdir()
+        info = {
+            "fps": 50,
+            "robot_type": "test",
+            "total_episodes": 1,
+            "features": {"observation.state": {"dtype": "float32", "shape": [2]}},
+        }
+        (tmp_path / "meta" / "info.json").write_text(json.dumps(info))
+        (tmp_path / "data" / "chunk-000").mkdir(parents=True)
+
+        t = 5
+        # Scalar columns use seed 100 → distinct values
+        rng_scalar = np.random.default_rng(100)
+        # List column uses seed 200 → distinct values
+        rng_list = np.random.default_rng(200)
+
+        list_data = rng_list.standard_normal((t, 2)).astype(np.float32)
+        rows = {
+            "episode_index": pa.array([0] * t, type=pa.int64()),
+            "frame_index": pa.array(list(range(t)), type=pa.int64()),
+            "index": pa.array(list(range(t)), type=pa.int64()),
+            "timestamp": pa.array([i / 50.0 for i in range(t)], type=pa.float32()),
+            # Scalar columns (should be ignored in favor of list-type)
+            "observation.state_0": pa.array(
+                rng_scalar.standard_normal(t).astype(np.float32).tolist(), type=pa.float32()
+            ),
+            "observation.state_1": pa.array(
+                rng_scalar.standard_normal(t).astype(np.float32).tolist(), type=pa.float32()
+            ),
+            # List-type column (canonical v3.0 — should win)
+            "observation.state": pa.array(
+                [row.tolist() for row in list_data], type=pa.list_(pa.float32(), 2)
+            ),
+        }
+        pq.write_table(
+            pa.table(rows),
+            str(tmp_path / "data" / "chunk-000" / "episode_000000.parquet"),
+        )
+
+        from torq.ingest.lerobot import ingest
+
+        episodes = ingest(tmp_path)
+        state = episodes[0].observations["state"]
+        assert state.shape == (t, 2)
+        # Verify the values match the list-type data, not the scalar data
+        np.testing.assert_array_almost_equal(state, list_data)
+
+
+class TestColumnToArrayEdgeCases:
+    """Edge case tests for _column_to_array helper."""
+
+    def test_ragged_list_column_raises_torq_ingest_error(self) -> None:
+        """Variable-length list column with unequal row lengths must raise TorqIngestError."""
+        import pyarrow as pa
+
+        from torq.errors import TorqIngestError
+        from torq.ingest.lerobot import _column_to_array
+
+        # Ragged: row 0 has 2 elements, row 1 has 3 elements
+        col = pa.chunked_array([pa.array([[1.0, 2.0], [3.0, 4.0, 5.0]])])
+        with pytest.raises(TorqIngestError, match="ragged"):
+            _column_to_array(col)
+
+    def test_null_values_raise_torq_ingest_error(self) -> None:
+        """Column with null values must raise TorqIngestError."""
+        import pyarrow as pa
+
+        from torq.errors import TorqIngestError
+        from torq.ingest.lerobot import _column_to_array
+
+        col = pa.chunked_array([pa.array([1.0, None, 3.0])])
+        with pytest.raises(TorqIngestError, match="null"):
+            _column_to_array(col)

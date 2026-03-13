@@ -86,14 +86,24 @@ def ingest(path: str | Path) -> list[Episode]:
         logger.warning("LeRobot dataset at '%s' has no episodes.", root)
         return []
 
-    # Discover video files: {(short_camera_key, episode_idx) → Path}
-    video_map = _discover_videos(root)
+    # Discover video files: per-episode (flat) and per-chunk (nested) layouts
+    per_episode_videos, per_chunk_videos = _discover_videos(root)
 
     episodes: list[Episode] = []
     for ep_idx in unique_episodes:
         mask = pc.equal(combined.column("episode_index"), ep_idx)
         ep_table = combined.filter(mask)
-        episode = _build_episode(ep_table, ep_idx, root, camera_keys, video_map, robot_type, fps)
+        episode = _build_episode(
+            ep_table,
+            ep_idx,
+            root,
+            camera_keys,
+            robot_type,
+            fps,
+            per_episode_videos=per_episode_videos,
+            per_chunk_videos=per_chunk_videos,
+            unique_episodes=unique_episodes,
+        )
         episodes.append(episode)
 
     return episodes
@@ -127,6 +137,52 @@ def _load_info(root: Path) -> dict:
         ) from exc
 
 
+def _is_list_type(col_type: pa.DataType) -> bool:
+    """Check if a PyArrow type is any list variant (fixed_size_list, list, large_list)."""
+    return (
+        pa.types.is_fixed_size_list(col_type)
+        or pa.types.is_list(col_type)
+        or pa.types.is_large_list(col_type)
+    )
+
+
+def _column_to_array(col: pa.ChunkedArray, dtype: np.dtype = np.float32) -> np.ndarray:
+    """Convert a PyArrow column to a numpy array, handling list-type and scalar columns.
+
+    Args:
+        col: PyArrow chunked array (single column from a table).
+        dtype: Target numpy dtype for the output array.
+
+    Returns:
+        np.ndarray: Shape ``[T, D]`` for list-type columns, ``[T]`` for scalar columns.
+
+    Raises:
+        TorqIngestError: If a variable-length list column contains ragged (unequal-length) rows,
+            or if the column contains null values.
+    """
+    if col.null_count > 0:
+        raise TorqIngestError(
+            f"Column contains {col.null_count} null value(s). "
+            f"LeRobot datasets should not have nulls in state/action columns. "
+            f"Check the source data for missing values."
+        )
+    col_type = col.type
+    if _is_list_type(col_type):
+        try:
+            result = np.array(col.to_pylist(), dtype=dtype)
+        except ValueError as exc:
+            raise TorqIngestError(
+                f"List-type column contains ragged (unequal-length) lists: {exc}"
+            ) from exc
+        if result.ndim != 2:
+            raise TorqIngestError(
+                f"Expected 2D array from list-type column, got shape {result.shape}. "
+                f"Column may contain ragged (unequal-length) lists."
+            )
+        return result
+    return col.to_numpy().astype(dtype, copy=True)
+
+
 def _load_parquet_chunks(root: Path) -> pa.Table | None:
     """Load and concatenate all Parquet chunk files from data/chunk-*/.
 
@@ -150,33 +206,42 @@ def _load_parquet_chunks(root: Path) -> pa.Table | None:
     for chunk_path in chunk_files:
         try:
             tables.append(pq.read_table(str(chunk_path)))
-        except Exception as exc:
+        except (pa.ArrowInvalid, pa.ArrowIOError, OSError) as exc:
             logger.warning("Skipping unreadable Parquet chunk '%s': %s", chunk_path, exc)
 
     if not tables:
         return None
-    return pa.concat_tables(tables)
+    try:
+        return pa.concat_tables(tables)
+    except pa.ArrowInvalid as exc:
+        raise TorqIngestError(
+            f"Parquet chunks in '{data_dir}' have incompatible schemas and cannot be "
+            f"concatenated. Ensure all chunk files have the same columns: {exc}"
+        ) from exc
 
 
-def _discover_videos(root: Path) -> dict[tuple[str, int], Path]:
-    """Map ``(short_camera_key, episode_idx)`` to MP4 file paths.
-
-    Parses filenames like ``observation.images.top_episode_000000.mp4``
-    and extracts the short key (``top``) and episode index (``0``).
-
-    Args:
-        root: Dataset root directory.
+def _discover_videos(
+    root: Path,
+) -> tuple[dict[tuple[str, int], Path], dict[str, list[Path]]]:
+    """Discover video files in both flat and nested layouts.
 
     Returns:
-        Dict mapping ``(short_key, episode_idx)`` to the MP4 path.
+        Tuple of:
+        - per_episode_map: ``{(short_key, ep_idx): path}`` from flat layout
+          (``videos/chunk-NNN/{key}_episode_NNN.mp4``)
+        - per_chunk_map: ``{short_key: [path, ...]}`` from nested layout
+          (``videos/{key}/chunk-NNN/file-NNN.mp4``)
     """
     videos_dir = root / "videos"
     if not videos_dir.exists():
-        return {}
+        return {}, {}
 
-    video_map: dict[tuple[str, int], Path] = {}
+    per_episode_map: dict[tuple[str, int], Path] = {}
+    per_chunk_map: dict[str, list[Path]] = {}
+
+    # Flat layout: videos/chunk-NNN/{key}_episode_NNN.mp4
     for mp4 in sorted(videos_dir.glob("chunk-*/*.mp4")):
-        stem = mp4.stem  # e.g. "observation.images.top_episode_000000"
+        stem = mp4.stem
         if "_episode_" not in stem:
             continue
         key_part, ep_part = stem.rsplit("_episode_", 1)
@@ -184,41 +249,101 @@ def _discover_videos(root: Path) -> dict[tuple[str, int], Path]:
             ep_idx = int(ep_part)
         except ValueError:
             continue
-        # Normalise: "observation.images.top" → "top"
         short_key = key_part.split(".")[-1]
-        video_map[(short_key, ep_idx)] = mp4
-    return video_map
+        existing = per_episode_map.get((short_key, ep_idx))
+        if existing is not None:
+            logger.warning(
+                "Video short-key collision: '%s' maps to both '%s' and '%s' for episode %d. "
+                "Using the later file. Consider using distinct camera names.",
+                short_key,
+                existing.name,
+                mp4.name,
+                ep_idx,
+            )
+        per_episode_map[(short_key, ep_idx)] = mp4
+
+    # Nested layout: videos/{video_key}/chunk-NNN/file-NNN.mp4
+    for mp4 in sorted(videos_dir.glob("*/chunk-*/*.mp4")):
+        key_dir = mp4.parent.parent.name  # e.g. "observation.images.top"
+        # Skip if key_dir looks like "chunk-NNN" (would match flat layout)
+        if key_dir.startswith("chunk-"):
+            continue
+        short_key = key_dir.split(".")[-1]
+        existing_chunk = per_chunk_map.get(short_key)
+        if existing_chunk and mp4.parent.parent != existing_chunk[0].parent.parent:
+            logger.warning(
+                "Video short-key collision: '%s' maps to multiple video keys in nested layout. "
+                "Consider using distinct camera names.",
+                short_key,
+            )
+        per_chunk_map.setdefault(short_key, []).append(mp4)
+
+    return per_episode_map, per_chunk_map
 
 
-def _group_observation_columns(columns: set[str], camera_keys: set[str]) -> dict[str, list[str]]:
-    """Group ``observation.*`` Parquet columns by feature prefix, excluding camera features.
+def _group_observation_columns(table: pa.Table, camera_keys: set[str]) -> dict[str, list[str]]:
+    """Group observation columns by feature prefix, excluding camera features.
+
+    Handles both scalar per-dimension columns (``observation.state_0``, ...)
+    and list-type columns (``observation.state`` as ``fixed_size_list``).
 
     Args:
-        columns: Set of all column names in the table.
-        camera_keys: Camera feature keys from info.json (e.g., ``observation.images.top``).
+        table: PyArrow table to inspect for column names and types.
+        camera_keys: Camera feature keys from info.json.
 
     Returns:
-        Dict mapping short observation name (e.g., ``state``) to sorted list of
-        dimension columns (e.g., ``[observation.state_0, ..., observation.state_13]``).
+        Dict mapping short observation name to sorted list of column names.
     """
+    columns = set(table.column_names)
     obs_groups: dict[str, list[str]] = {}
+    captured_prefixes: set[str] = set()
+
+    # Pass 1: scalar per-dimension columns (observation.state_0, observation.state_1, ...)
     for c in sorted(columns):
         if not c.startswith("observation."):
             continue
-        # Skip columns belonging to camera features
         if any(c == ck or c.startswith(ck + "_") for ck in camera_keys):
             continue
-        # Determine feature prefix by stripping trailing _N dimension suffix
         m = re.match(r"^(.+)_(\d+)$", c)
-        prefix = m.group(1) if m else c
-        obs_groups.setdefault(prefix, []).append(c)
+        if m:
+            prefix = m.group(1)
+            obs_groups.setdefault(prefix, []).append(c)
+            captured_prefixes.add(prefix)
+
+    # Pass 2: list-type columns (observation.state as fixed_size_list)
+    for c in sorted(columns):
+        if not c.startswith("observation."):
+            continue
+        if any(c == ck or c.startswith(ck + "_") for ck in camera_keys):
+            continue
+        if c in captured_prefixes:
+            # Both scalar _N columns AND list-type column exist for same prefix
+            # Prefer list-type (canonical v3.0 format)
+            col_type = table.column(c).type
+            if _is_list_type(col_type):
+                logger.warning(
+                    "Column '%s' exists as both scalar _N columns and list-type. "
+                    "Using list-type (canonical v3.0 format).",
+                    c,
+                )
+                obs_groups[c] = [c]  # overwrite scalar group with single list column
+            continue
+        # Skip columns already captured as dimension columns
+        if re.match(r"^(.+)_(\d+)$", c):
+            continue
+        # Check if this is a list-type or plain scalar column not captured by Pass 1
+        col_type = table.column(c).type
+        if _is_list_type(col_type):
+            obs_groups.setdefault(c, []).append(c)
+        elif pa.types.is_floating(col_type) or pa.types.is_integer(col_type):
+            # Plain scalar column without _N suffix (e.g. observation.velocity)
+            obs_groups.setdefault(c, []).append(c)
 
     # Convert prefixes to short names: "observation.state" → "state"
     result: dict[str, list[str]] = {}
     for prefix, cols in obs_groups.items():
         short_name = prefix.split("observation.", 1)[1]
         result[short_name] = sorted(cols)
-
     return result
 
 
@@ -227,9 +352,12 @@ def _build_episode(
     ep_idx: int,
     root: Path,
     camera_keys: set[str],
-    video_map: dict[tuple[str, int], Path],
     robot_type: str,
     fps: float,
+    *,
+    per_episode_videos: dict[tuple[str, int], Path],
+    per_chunk_videos: dict[str, list[Path]],
+    unique_episodes: list[int],
 ) -> Episode:
     """Build one Episode from a filtered PyArrow table (rows for one episode).
 
@@ -238,9 +366,11 @@ def _build_episode(
         ep_idx: Episode index.
         root: Dataset root path (used as source_path).
         camera_keys: Feature keys identified as camera/video observations.
-        video_map: Mapping of ``(short_key, ep_idx)`` to MP4 paths.
         robot_type: Robot type from info.json (used in metadata).
         fps: Frames per second from info.json (fallback for timestamp synthesis).
+        per_episode_videos: Flat layout video map ``{(short_key, ep_idx): path}``.
+        per_chunk_videos: Nested layout video map ``{short_key: [path, ...]}``.
+        unique_episodes: All episode indices in the dataset (for multi-episode warning).
 
     Returns:
         Episode with observations, actions, and timestamps.
@@ -257,27 +387,79 @@ def _build_episode(
         step_ns = int(1e9 / fps)
         timestamps = np.arange(n_rows, dtype=np.int64) * step_ns
 
-    # ── Actions (prefix-based column discovery) ──
-    action_cols = sorted(c for c in columns if c == "action" or c.startswith("action_"))
-    if action_cols:
-        actions = np.column_stack(
-            [table.column(c).to_numpy().astype(np.float32) for c in action_cols]
-        )
+    # ── task_index (optional) ──
+    metadata: dict = {"task": "", "embodiment": robot_type}
+    if "task_index" in columns:
+        task_idx_values = table.column("task_index").to_pylist()
+        unique_task_indices = set(task_idx_values)
+        if len(unique_task_indices) > 1:
+            from collections import Counter
+
+            logger.warning(
+                "Episode %d has mixed task_index values %s — using most common.",
+                ep_idx,
+                unique_task_indices,
+            )
+            metadata["task_index"] = Counter(task_idx_values).most_common(1)[0][0]
+        elif task_idx_values:
+            metadata["task_index"] = task_idx_values[0]
+
+    # ── Actions (prefix-based column discovery, list-type aware) ──
+    action_cols = sorted(c for c in columns if c == "action" or re.match(r"^action_\d+$", c))
+    # If both list-type "action" and scalar "action_N" exist, prefer list-type
+    if "action" in action_cols and _is_list_type(table.column("action").type):
+        if len(action_cols) > 1:
+            logger.warning(
+                "Column 'action' exists as both scalar _N columns and list-type. "
+                "Using list-type (canonical v3.0 format).",
+            )
+        actions = _column_to_array(table.column("action"))
+    elif action_cols:
+        if len(action_cols) == 1 and _is_list_type(table.column(action_cols[0]).type):
+            actions = _column_to_array(table.column(action_cols[0]))
+        else:
+            # Multiple scalar columns → stack into [T, D]
+            actions = np.column_stack([_column_to_array(table.column(c)) for c in action_cols])
     else:
         actions = np.empty((len(timestamps), 0), dtype=np.float32)
 
     # ── Observations — discover ALL observation.* non-camera columns ──
     observations: dict[str, np.ndarray | ImageSequence] = {}
-    obs_groups = _group_observation_columns(columns, camera_keys)
+    obs_groups = _group_observation_columns(table, camera_keys)
     for short_name, dim_cols in obs_groups.items():
-        observations[short_name] = np.column_stack(
-            [table.column(c).to_numpy().astype(np.float32) for c in dim_cols]
-        )
+        if len(dim_cols) == 1 and _is_list_type(table.column(dim_cols[0]).type):
+            # Single list-type column → already [T, D]
+            observations[short_name] = _column_to_array(table.column(dim_cols[0]))
+        else:
+            # Multiple scalar columns → stack into [T, D]
+            observations[short_name] = np.column_stack(
+                [_column_to_array(table.column(c)) for c in dim_cols]
+            )
 
-    # ── Camera observations (lazy ImageSequence) ──
-    for (short_key, vidx), mp4_path in video_map.items():
+    # ── Camera observations: per-episode first, per-chunk fallback ──
+    for (short_key, vidx), mp4_path in per_episode_videos.items():
         if vidx == ep_idx:
+            if short_key in observations and not isinstance(observations[short_key], ImageSequence):
+                logger.warning(
+                    "Camera '%s' overwrites existing observation array for episode %d."
+                    " This may indicate a short-key collision between camera and"
+                    " non-camera features.",
+                    short_key,
+                    ep_idx,
+                )
             observations[short_key] = ImageSequence(mp4_path)
+
+    for short_key, mp4_paths in per_chunk_videos.items():
+        if short_key not in observations:  # don't overwrite per-episode match
+            # Concatenated MP4 — assign full file, log warning
+            observations[short_key] = ImageSequence(mp4_paths[0])
+            if len(unique_episodes) > 1:
+                logger.warning(
+                    "Camera '%s' uses concatenated MP4 ('%s') containing multiple episodes. "
+                    "Frame-level slicing is not yet supported — ImageSequence points to full file.",
+                    short_key,
+                    mp4_paths[0].name,
+                )
 
     # Warn if camera features from info.json have no matching video
     for cam_key in camera_keys:
@@ -295,5 +477,5 @@ def _build_episode(
         actions=actions,
         timestamps=timestamps,
         source_path=root,
-        metadata={"task": "", "embodiment": robot_type},
+        metadata=metadata,
     )
