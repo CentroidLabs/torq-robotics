@@ -25,6 +25,11 @@ __all__ = [
     "update_index",
     "read_manifest",
     "query_index",
+    "read_snapshots",
+    "write_snapshots",
+    "read_experiments",
+    "write_experiments",
+    "update_manifest_lineage_counts",
 ]
 
 logger = logging.getLogger(__name__)
@@ -53,16 +58,24 @@ def _normalise(s: str) -> str:
 
 
 def _atomic_write_json(data: dict | list, path: Path) -> None:
-    """Write JSON data atomically: write to ``.json.tmp`` then ``os.replace()``.
+    """Write JSON data atomically: write to a PID-namespaced ``.tmp`` file then ``os.replace()``.
 
     This guarantees the index is never left in a partial state — the file either
     contains the previous complete state or the new complete state.
+
+    The temp file is named ``<path>.<pid>.tmp`` to avoid collisions between
+    different processes writing to the same directory.
 
     .. note::
         R1 limitation: ``os.fsync()`` is not called before ``os.replace()``.
         On a hard-crash (power loss), the ``.tmp`` file may be partially written
         and the rename may not have occurred. The index would revert to the
         pre-save state rather than being corrupted, which is acceptable for R1.
+
+        True concurrent multi-process writes are not protected against — R1
+        assumes single-process, single-user operation.  The PID suffix prevents
+        temp-file collisions between different processes but does not provide
+        read-modify-write atomicity.
 
     Args:
         data: JSON-serialisable dict or list.
@@ -71,9 +84,58 @@ def _atomic_write_json(data: dict | list, path: Path) -> None:
     Raises:
         OSError: If the write or rename fails.
     """
-    tmp = path.with_suffix(".json.tmp")
+    tmp = path.parent / f"{path.name}.{os.getpid()}.tmp"
     tmp.write_text(json.dumps(data, indent=2), encoding="utf-8")
     os.replace(tmp, path)
+
+
+def _count_lineage_records(index_root: Path) -> tuple[int, int]:
+    """Return (snapshot_count, experiment_count) from the lineage JSON files.
+
+    Delegates to ``read_snapshots`` and ``read_experiments`` to avoid
+    duplicating file I/O logic.  Returns ``(0, 0)`` if the files are absent.
+
+    Args:
+        index_root: Directory containing the JSON index shards.
+
+    Returns:
+        Tuple of ``(snapshot_count, experiment_count)``.
+    """
+    return len(read_snapshots(index_root)), len(read_experiments(index_root))
+
+
+def update_manifest_lineage_counts(index_root: Path) -> None:
+    """Refresh ``snapshot_count`` and ``experiment_count`` in ``manifest.json``.
+
+    Should be called by snapshot/experiment code after persisting a new record.
+    Creates ``manifest.json`` with zero episode_count if it does not yet exist.
+
+    Args:
+        index_root: Directory containing the JSON index shards.
+
+    Raises:
+        OSError: If the manifest write fails.
+    """
+    index_root.mkdir(parents=True, exist_ok=True)
+    manifest_path = index_root / "manifest.json"
+
+    manifest: dict = (
+        json.loads(manifest_path.read_text(encoding="utf-8"))
+        if manifest_path.exists()
+        else {"schema_version": SCHEMA_VERSION, "episode_count": 0}
+    )
+
+    snapshot_count, experiment_count = _count_lineage_records(index_root)
+    manifest["snapshot_count"] = snapshot_count
+    manifest["experiment_count"] = experiment_count
+    manifest["last_updated"] = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    _atomic_write_json(manifest, manifest_path)
+    logger.debug(
+        "Manifest lineage counts updated: snapshots=%d experiments=%d",
+        snapshot_count,
+        experiment_count,
+    )
 
 
 def _next_episode_id(index_root: Path) -> str:
@@ -172,6 +234,9 @@ def update_index(episode_id: str, episode: Episode, index_root: Path) -> None:
     # ── Update manifest ──
     manifest["schema_version"] = SCHEMA_VERSION
     manifest["episode_count"] = manifest.get("episode_count", 0) + 1
+    snapshot_count, experiment_count = _count_lineage_records(index_root)
+    manifest["snapshot_count"] = snapshot_count
+    manifest["experiment_count"] = experiment_count
     manifest["last_updated"] = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
     # ── Atomic write all shards ──
@@ -181,6 +246,66 @@ def update_index(episode_id: str, episode: Episode, index_root: Path) -> None:
     _atomic_write_json(quality_list, quality_path)
 
     logger.debug("Index updated for %s (total episodes: %d)", episode_id, manifest["episode_count"])
+
+
+def read_snapshots(index_root: Path) -> dict:
+    """Load snapshots.json from the given index directory.
+
+    Args:
+        index_root: Directory containing the JSON index shards.
+
+    Returns:
+        Dict mapping ``snapshot_id`` → snapshot record.
+        Returns an empty dict if ``snapshots.json`` does not exist.
+    """
+    snapshots_path = index_root / "snapshots.json"
+    if not snapshots_path.exists():
+        return {}
+    return json.loads(snapshots_path.read_text(encoding="utf-8"))
+
+
+def write_snapshots(data: dict, index_root: Path) -> None:
+    """Write snapshots.json atomically to the given index directory.
+
+    Args:
+        data: Dict mapping ``snapshot_id`` → snapshot record.
+        index_root: Directory containing the JSON index shards.
+
+    Raises:
+        OSError: If the write or rename fails.
+    """
+    snapshots_path = index_root / "snapshots.json"
+    _atomic_write_json(data, snapshots_path)
+
+
+def read_experiments(index_root: Path) -> dict:
+    """Load experiments.json from the given index directory.
+
+    Args:
+        index_root: Directory containing the JSON index shards.
+
+    Returns:
+        Dict mapping ``experiment_id`` → experiment record.
+        Returns an empty dict if ``experiments.json`` does not exist.
+    """
+    experiments_path = index_root / "experiments.json"
+    if not experiments_path.exists():
+        return {}
+    return json.loads(experiments_path.read_text(encoding="utf-8"))
+
+
+def write_experiments(data: dict, index_root: Path) -> None:
+    """Write experiments.json atomically to the given index directory.
+
+    Args:
+        data: Dict mapping ``experiment_id`` → experiment record.
+        index_root: Directory containing the JSON index shards.
+
+    Raises:
+        OSError: If the write or rename fails.
+    """
+    experiments_path = index_root / "experiments.json"
+    _atomic_write_json(data, experiments_path)
 
 
 def read_manifest(index_root: Path) -> dict:
