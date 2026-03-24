@@ -119,9 +119,7 @@ class ExperimentDiff:
         return "\n".join(lines)
 
 
-def _find_experiment_by_name(
-    name: str, all_experiments: dict, project: str | None = None
-) -> dict:
+def _find_experiment_by_name(name: str, all_experiments: dict, project: str | None = None) -> dict:
     """Find the most recent experiment record matching the given name.
 
     Args:

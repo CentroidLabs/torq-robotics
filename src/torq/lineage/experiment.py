@@ -147,7 +147,8 @@ class Experiment:
         write_experiments(existing, index_root)
         if metrics:
             _gravity_well(
-                message=f"Experiment '{self.name}' logged. Share your research journey with your lab",
+                message=f"Experiment '{self.name}' logged."
+                " Share your research journey with your lab",
                 feature="GW-SDK-08",
             )
 
